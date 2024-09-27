@@ -1,0 +1,5 @@
+packages: *
+
+optimization: 2
+
+constraints: zlib +bundled-c-zlib

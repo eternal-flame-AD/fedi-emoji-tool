@@ -1,0 +1,77 @@
+cabal-version:      3.0
+name:               fedi-emoji-tool
+version:            0.1.0.0
+synopsis:           Misskey/Fediverse emoji tool
+-- description:
+homepage:           https://github.com/eternal-flame-ad/fedi-emoji-tool
+license:            Apache-2.0
+license-file:       LICENSE
+author:             eternal-flame-AD
+maintainer:         yume@yumechi.jp
+-- copyright:
+category:           Web
+build-type:         Simple
+extra-doc-files:    CHANGELOG.md
+-- extra-source-files:
+
+common warnings
+    ghc-options: -Wall -Wextra
+
+common base-reqs
+    default-extensions:       OverloadedStrings,
+                              LambdaCase,
+                              ScopedTypeVariables,
+                              TypeApplications
+    build-depends:
+        base >=4.12 && <5,
+        data-default-class ^>=0.1,
+        bytestring ^>=0.11,
+        time ^>=1.11
+
+common jsonhttp
+    build-depends:
+        http-client ^>=0.7,
+        http-client-tls ^>=0.3,
+        http-types ^>=0.12,
+        http-conduit ^>=2.3,
+        text ^>=2.1,
+        aeson ^>=2.2
+
+common concurrent
+    ghc-options: -threaded
+    build-depends:
+        async ^>=2.2
+
+common concurrent-bin
+    ghc-options: -threaded -with-rtsopts=-N
+
+library
+    import:           warnings, base-reqs, jsonhttp, concurrent
+    exposed-modules:  Web.URL,
+                      Web.Application.Fediverse.Misskey.Emoji,
+                      Web.Application.Fediverse.Misskey.Federation,
+                      Web.Application.Fediverse.Misskey.Drive,
+                      Web.Application.Fediverse.Misskey.Base,
+                      Web.Application.Fediverse.Mastodon.Base,
+                      Web.Application.Fediverse.Mastodon.Emoji
+    -- other-modules:
+    -- other-extensions:
+    hs-source-dirs:   src
+    default-language: Haskell2010
+
+executable fedi-emoji-tool
+    import:           warnings, base-reqs, jsonhttp, concurrent, concurrent-bin
+    main-is:          Main.hs
+    -- other-modules:
+    -- other-extensions:
+    build-depends:
+        fedi-emoji-tool,
+        optparse-applicative ^>=0.18,
+        unordered-containers ^>=0.2,
+        terminal-progress-bar ^>=0.4,
+        directory ^>=1.3,
+        filepath ^>=1.5,
+        random ^>=1.2
+
+    hs-source-dirs:   app
+    default-language: Haskell2010
