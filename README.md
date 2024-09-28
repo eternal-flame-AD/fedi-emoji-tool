@@ -29,7 +29,7 @@ My memory optimization goal is <8GB usage for a full pack of 47k emojis.
 #### Steps
 
 - Do a quick sanity test by running the `home-emojis` and `instances` commands to see if the tool can connect to the instance and fetch the emoji and federation data.
-- Run `fetch-remote-emojis` to fetch the remote emojis from the instances, this will generate a JSON file that describes the unique emojis and the instances that have them. It would look like this:
+- Run `fetch-remote-emojis` to fetch the remote emojis from the instances, this will generate a JSON file that describes the unique emojis and the instances that have them. It would look like this, it is designed to be as flat as possible to ease `jq`-based filtering and manual editing:
 
 ```json
 {
