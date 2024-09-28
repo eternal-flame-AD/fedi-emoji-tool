@@ -33,6 +33,7 @@ import Network.HTTP.Simple (setRequestHeaders)
 import Options.Applicative
 import System.Directory (createDirectoryIfMissing)
 import System.Environment.Blank (getEnvDefault)
+import System.Exit (exitFailure)
 import System.FilePath ((</>))
 import System.IO (Handle, IOMode (WriteMode), hPutStrLn, openFile, stderr, stdout)
 import System.IO.Unsafe (unsafePerformIO)
@@ -637,6 +638,10 @@ confirmIO msg = do
     putStr $ msg ++ " [y/N]: "
     getLine <&> \case
         "y" -> True
+        "Y" -> True
+        "yes" -> True
+        "Yes" -> True
+        "YES" -> True
         _ -> False
 
 {-# ANN module ("HLint: ignore Redundant <&>" :: String) #-} -- hurts readability
@@ -841,52 +846,57 @@ main =
                             )
                             >>= encodeFile (outputDir </> "chunk-" ++ show chunkIdx </> "meta.json")
                 ClearLocalOnlyEmojis ->
-                    let go (prevIds, untilId) =
-                            let leopts = def{listEmojisUntilId = untilId, listEmojisLimit = Just limitVal}
-                             in admListEmojis manager (bearerAuthenticated home (T.pack token)) leopts
-                                    >>= either (error . describeRequestError) pure
-                                    >>= \case
-                                        [] -> pure (prevIds, Nothing)
-                                        emojis ->
-                                            let nextIds = mapMaybe emojiId emojis
-                                             in case nextIds of
-                                                    [] -> throwIO $ userError "Upstream failed to provide next token"
-                                                    ix ->
-                                                        let
-                                                            nextToken = last ix
-                                                            localOnlyEmojis = filter ((== Just True) . emojiLocalOnly) emojis
-                                                            emojiIds = mapMaybe emojiId localOnlyEmojis
-                                                         in
-                                                            (emojiIds ++ prevIds, Just nextToken)
-                                                                <$ hPutStrLn stderr ("Located " ++ show (length emojiIds) ++ " local-only emojis")
-                     in when (null token) (throwIO $ userError "MISSKEY_TOKEN is not set")
-                            >> untilM (isNothing . snd) go ([], Nothing)
-                            >>= (mapM (admBulkDeleteEmojis manager conf) . filter (not . null))
-                                . nub
-                                . map fst
-                            >>= ( \case
-                                    Left err ->
-                                        throwIO $
-                                            userError $
-                                                "Error deleting emojis: " ++ describeRequestError err
-                                    Right _ -> pure ()
-                                )
-                                . sequence
+                    confirmIO "WARNING: This will delete all emojis marked local only, are you sure?" >>= \case
+                        False -> hPutStrLn stderr "Aborted" >> exitFailure
+                        True ->
+                            let go (prevIds, untilId) =
+                                    let leopts = def{listEmojisUntilId = untilId, listEmojisLimit = Just limitVal}
+                                     in admListEmojis manager (bearerAuthenticated home (T.pack token)) leopts
+                                            >>= either (error . describeRequestError) pure
+                                            >>= \case
+                                                [] -> pure (prevIds, Nothing)
+                                                emojis ->
+                                                    let nextIds = mapMaybe emojiId emojis
+                                                     in case nextIds of
+                                                            [] -> throwIO $ userError "Upstream failed to provide next token"
+                                                            ix ->
+                                                                let
+                                                                    nextToken = last ix
+                                                                    localOnlyEmojis = filter ((== Just True) . emojiLocalOnly) emojis
+                                                                    emojiIds = mapMaybe emojiId localOnlyEmojis
+                                                                 in
+                                                                    (emojiIds ++ prevIds, Just nextToken)
+                                                                        <$ hPutStrLn stderr ("Located " ++ show (length emojiIds) ++ " local-only emojis")
+                             in when (null token) (throwIO $ userError "MISSKEY_TOKEN is not set")
+                                    >> untilM (isNothing . snd) go ([], Nothing)
+                                    >>= (mapM (admBulkDeleteEmojis manager conf) . filter (not . null))
+                                        . nub
+                                        . map fst
+                                    >>= ( \case
+                                            Left err ->
+                                                throwIO $
+                                                    userError $
+                                                        "Error deleting emojis: " ++ describeRequestError err
+                                            Right _ -> pure ()
+                                        )
+                                        . sequence
                 DeleteFolder folder recursive -> do
-                    when recursive $
-                        void $
-                            untilM
-                                (== False)
-                                ( \_ -> do
-                                    files <- driveListFiles manager conf def{driveListFilesFolderId = Just (T.pack folder), driveListFilesLimit = Just limitVal}
-                                    case files of
-                                        Left err -> error $ describeRequestError err
-                                        Right [] -> pure False
-                                        Right resp -> do
-                                            let fs = map driveCreateResponseId resp
-                                            forConcurrently_ fs $ driveDeleteFile manager conf
-                                            pure True
-                                )
-                                True
-
-                    driveDeleteFolder manager conf (T.pack folder) >> hPutStrLn stderr "Folder deleted"
+                    confirmIO "DANGER: All notes attached to the folder will also be affected. Are you sure?" >>= \case
+                        False -> hPutStrLn stderr "Aborted" >> exitFailure
+                        True -> do
+                            when recursive $
+                                void $
+                                    untilM
+                                        (== False)
+                                        ( \_ -> do
+                                            files <- driveListFiles manager conf def{driveListFilesFolderId = Just (T.pack folder), driveListFilesLimit = Just limitVal}
+                                            case files of
+                                                Left err -> error $ describeRequestError err
+                                                Right [] -> pure False
+                                                Right resp -> do
+                                                    let fs = map driveCreateResponseId resp
+                                                    forConcurrently_ fs $ driveDeleteFile manager conf
+                                                    pure True
+                                        )
+                                        True
+                            driveDeleteFolder manager conf (T.pack folder) >> hPutStrLn stderr "Folder deleted"
