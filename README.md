@@ -1,18 +1,20 @@
 # Fedi-Emoji-Tool
 
-A tool to fetch and pack custom emojis from federated Misskey instances.
+A tool to fetch and pack custom emojis from federated Misskey and Mastodon instances for Misskey import.
 
 The tools is designed to be efficient and polite to other instances. Notably:
 
 - Concurrent connections and request frequency are limited on a per-instance basis.
 - The tool will not fetch the same emoji twice, and will shuffle the order of fetching to avoid spamming the same instance.
-- The tool will not fetch emojis that any instance has marked with a license or local-only flag.
+- The tool will not fetch emojis that any instance has marked with a license flag.
 - The tool will not fetch emojis that are marked as sensitive.
 - The tool will not fetch emojis that are present in very few instances (default threshold 5), to avoid fetching original content that is not meant to be shared.
 
 ## Expectations
 
-On [my instance](https://mi.yumechi.jp) with 6.6k federations, the tool selected ~12k unique emojis.
+On [my instance](https://mi.yumechi.jp) with 6.6k federations, the tool selected ~47k unique emojis under the default filter.
+
+My memory optimization goal is <8GB usage for a full pack of 47k emojis.
 
 ## Usage 
 
@@ -62,13 +64,13 @@ On [my instance](https://mi.yumechi.jp) with 6.6k federations, the tool selected
 ### Full CLI Usage
 
 ```bash
-fedi-emoji-tool - A tool to fetch and pack custom emojis from Misskey instances
+fedi-emoji-tool - A tool to fetch and pack custom emojis from Misskey and
+Mastodon instances for Misskey
 
 Usage: fedi-emoji-tool [-h|--home URL] [-l|--pagination INT] [-t|--timeout INT] 
                        [--head INT] [-v|--verbose] COMMAND
 
-  A tool to fetch and pack custom emojis from Misskey (and pending Mastodon)
-  instances
+  A tool to fetch and pack custom emojis from Misskey and Mastodon instances
 
 Available options:
   -h,--home URL            Home URL of the Misskey instance, will read

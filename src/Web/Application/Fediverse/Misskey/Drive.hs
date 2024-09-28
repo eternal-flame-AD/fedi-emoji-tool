@@ -3,7 +3,7 @@
 module Web.Application.Fediverse.Misskey.Drive where
 
 import Control.Exception (catch)
-import Data.Aeson (FromJSON (parseJSON), ToJSON (toJSON), eitherDecode, genericParseJSON, genericToJSON)
+import Data.Aeson
 import Data.ByteString (ByteString)
 import Data.Default.Class (Default (def))
 import Data.Function ((&))
@@ -14,9 +14,10 @@ import Data.Time (UTCTime)
 import GHC.Generics
 import Network.HTTP.Client
 import Network.HTTP.Client.MultipartFormData
-import Network.HTTP.Simple (setRequestBearerAuth, setRequestHeader, setRequestMethod)
-import Network.HTTP.Types (hContentType, ok200)
+import Network.HTTP.Simple (setRequestBearerAuth, setRequestBodyJSON, setRequestHeader, setRequestMethod)
+import Network.HTTP.Types (hContentType, ok200, status204)
 import Web.Application.Fediverse.Misskey.Base (
+    MisskeyErrorWrapper (MisskeyErrorWrapper),
     RequestError (..),
     ServerConf (baseURL),
     bearerToken,
@@ -103,6 +104,112 @@ driveUploadFile man serverConf opts =
                             Left e -> Left $ BadBodyError $ "Could not decode response body" ++ show e
                         else case eitherDecode body of
                             Right me -> Left $ APIError me
+                            Left e ->
+                                Left $
+                                    BadBodyError $
+                                        "Could not decode error response body (status: "
+                                            ++ show (responseStatus response)
+                                            ++ "): "
+                                            ++ show e
+
+data DriveListFilesOpts = DriveListFilesOpts
+    { driveListFilesFolderId :: Maybe Text
+    , driveListFilesLimit :: Maybe Int
+    , driveListFilesSinceId :: Maybe Text
+    , driveListFilesUntilId :: Maybe Text
+    }
+    deriving (Show, Generic)
+
+instance Default DriveListFilesOpts where
+    def = DriveListFilesOpts Nothing Nothing Nothing Nothing
+
+instance ToJSON DriveListFilesOpts where
+    toJSON = genericToJSON $ (unTagCamelCaseOptions "driveListFiles"){omitNothingFields = True}
+
+driveListFiles :: Manager -> ServerConf -> DriveListFilesOpts -> IO (Either RequestError [DriveCreateResponse])
+driveListFiles man serverConf opts =
+    do
+        let bearer = fromMaybe (error "This request requires authentication") $ bearerToken serverConf
+        req0 <- (parseRequest . unpack . toURL) $ baseURL serverConf <> "/api/drive/files"
+        let req =
+                setRequestBearerAuth (encodeUtf8 bearer) $
+                    setRequestMethod "POST" $
+                        setRequestBodyJSON opts req0
+        result <-
+            catch
+                (Right <$> httpLbs req{decompress = const True} man)
+                (pure . Left . HTTPError)
+        case result of
+            Left e -> pure $ Left e
+            Right response -> do
+                let body = responseBody response
+                pure $
+                    if responseStatus response == ok200
+                        then case eitherDecode body of
+                            Right r -> Right r
+                            Left e -> Left $ BadBodyError $ "Could not decode response body" ++ show e
+                        else case eitherDecode body of
+                            Right (MisskeyErrorWrapper me) -> Left $ APIError me
+                            Left e ->
+                                Left $
+                                    BadBodyError $
+                                        "Could not decode error response body (status: "
+                                            ++ show (responseStatus response)
+                                            ++ "): "
+                                            ++ show e
+
+driveDeleteFile :: Manager -> ServerConf -> Text -> IO (Either RequestError ())
+driveDeleteFile man serverConf fileId =
+    do
+        let bearer = fromMaybe (error "This request requires authentication") $ bearerToken serverConf
+        req0 <- (parseRequest . unpack . toURL) $ baseURL serverConf <> "/api/drive/files/delete"
+        let req =
+                setRequestBearerAuth (encodeUtf8 bearer) $
+                    setRequestBodyJSON (object ["fileId" .= fileId]) $
+                        setRequestMethod "POST" req0
+        result <-
+            catch
+                (Right <$> httpLbs req{decompress = const True} man)
+                (pure . Left . HTTPError)
+        case result of
+            Left e -> pure $ Left e
+            Right response -> do
+                let body = responseBody response
+                pure $
+                    if responseStatus response == status204
+                        then Right ()
+                        else case eitherDecode body of
+                            Right (MisskeyErrorWrapper me) -> Left $ APIError me
+                            Left e ->
+                                Left $
+                                    BadBodyError $
+                                        "Could not decode error response body (status: "
+                                            ++ show (responseStatus response)
+                                            ++ "): "
+                                            ++ show e
+
+driveDeleteFolder :: Manager -> ServerConf -> Text -> IO (Either RequestError ())
+driveDeleteFolder man serverConf folderId =
+    do
+        let bearer = fromMaybe (error "This request requires authentication") $ bearerToken serverConf
+        req0 <- (parseRequest . unpack . toURL) $ baseURL serverConf <> "/api/drive/folders/delete"
+        let req =
+                setRequestBearerAuth (encodeUtf8 bearer) $
+                    setRequestBodyJSON (object ["folderId" .= folderId]) $
+                        setRequestMethod "POST" req0
+        result <-
+            catch
+                (Right <$> httpLbs req{decompress = const True} man)
+                (pure . Left . HTTPError)
+        case result of
+            Left e -> pure $ Left e
+            Right response -> do
+                let body = responseBody response
+                pure $
+                    if responseStatus response == status204
+                        then Right ()
+                        else case eitherDecode body of
+                            Right (MisskeyErrorWrapper me) -> Left $ APIError me
                             Left e ->
                                 Left $
                                     BadBodyError $

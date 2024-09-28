@@ -5,7 +5,7 @@ module Main where
 import Control.Concurrent (MVar, modifyMVar_, newMVar, readMVar, threadDelay, withMVar)
 import Control.Concurrent.Async (forConcurrently, forConcurrently_)
 import Control.Exception (IOException, catch, throwIO)
-import Control.Monad (forM, forM_, when, (>=>))
+import Control.Monad (forM_, void, when, (>=>))
 import Data.Aeson
 import Data.Bits (shiftL)
 import Data.ByteString (ByteString)
@@ -38,6 +38,8 @@ import System.IO (Handle, IOMode (WriteMode), hPutStrLn, openFile, stderr, stdou
 import System.IO.Unsafe (unsafePerformIO)
 import System.ProgressBar (Label (..), Progress (Progress, progressCustom, progressDone, progressTodo), Style (stylePrefix), defStyle, incProgress, newProgressBar, updateProgress)
 import System.Random (randomRIO)
+import qualified Web.Application.Fediverse.Mastodon.Base as MAS
+import qualified Web.Application.Fediverse.Mastodon.Emoji as MASE
 import Web.Application.Fediverse.Misskey.Base (
     PaginationOptions (limit),
     RequestError (HTTPError),
@@ -51,6 +53,7 @@ import Web.Application.Fediverse.Misskey.Base (
     untilM,
     whileForM,
  )
+import Web.Application.Fediverse.Misskey.Drive (DriveCreateResponse (driveCreateResponseId), DriveListFilesOpts (driveListFilesFolderId, driveListFilesLimit), driveDeleteFile, driveDeleteFolder, driveListFiles)
 import Web.Application.Fediverse.Misskey.Emoji (
     EmojiItem (EmojiItem, emojiAliases, emojiCategory, emojiId, emojiIsSensitive, emojiLocalOnly, emojiName, emojiUrl),
     ListEmojisOptions (..),
@@ -76,6 +79,7 @@ data Command
     | MetaMerge String [FilePath]
     | PackRemoteEmojis String String Float Int Int64
     | ClearLocalOnlyEmojis
+    | DeleteFolder String Bool
 
 opts :: Parser (CommonOpts, Command)
 opts =
@@ -226,14 +230,31 @@ opts =
                         (pure ClearLocalOnlyEmojis)
                         (progDesc "[Auth required] Clear local-only emojis, a mistake fixer")
                     )
+                <> command
+                    "delete-folder"
+                    ( info
+                        ( DeleteFolder
+                            <$> argument
+                                str
+                                ( metavar "FOLDER"
+                                    <> help "Folder to delete"
+                                )
+                            <*> switch
+                                ( long "recursive"
+                                    <> short 'r'
+                                    <> help "Recursively delete the folder"
+                                )
+                        )
+                        (progDesc "[Auth required] Delete a folder")
+                    )
             )
 
 parser :: ParserInfo (CommonOpts, Command)
 parser =
     info
         opts
-        ( header "fedi-emoji-tool - A tool to fetch and pack custom emojis from Misskey instances"
-            <> progDesc "A tool to fetch and pack custom emojis from Misskey (and pending Mastodon) instances"
+        ( header "fedi-emoji-tool - A tool to fetch and pack custom emojis from Misskey and Mastodon instances for Misskey"
+            <> progDesc "A tool to fetch and pack custom emojis from Misskey and Mastodon instances"
             <> footer "Author: Yume <@yume@mi.yumechi.jp>"
         )
 
@@ -277,17 +298,56 @@ retryM n act =
         Left _ -> retryM (n - 1) act
         Right a -> pure $ Right a
 
-fetchWorker :: FederationInstance -> Manager -> MVar EmojiMap -> IO Bool
-fetchWorker FederationInstance{fedHost = host'} manager emap =
-    retryM
-        3
-        ( listEmojis manager (unauthenticated $ "https://" <> URLFrag host' <> "/")
-        )
+data FetchAPIType = FetchMisskeyAPI | FetchMastodonAPI
+
+fetchWorker ::
+    FetchAPIType ->
+    MVar PoliteWaiter ->
+    MVar Handle ->
+    FederationInstance ->
+    Manager ->
+    MVar EmojiMap ->
+    IO Bool
+fetchWorker FetchMisskeyAPI pw stderr' FederationInstance{fedHost = host'} manager emap =
+    pwWait pw (lockHPutStrLn stderr') "dns"
+        >> retryM
+            3
+            ( listEmojis manager (unauthenticated $ "https://" <> URLFrag host' <> "/")
+            )
         >>= \case
-            Left err -> hPutStrLn stderr ("Error fetching emojis from " ++ T.unpack host' ++ ": " ++ describeRequestError err) $> False
+            Left err -> lockHPutStrLn stderr' ("Error fetching emojis from " ++ T.unpack host' ++ ": " ++ describeRequestError err) $> False
             Right emojis' -> do
                 let entries = map newEmojiEntry emojis'
-                putStrLn $ "Fetched " ++ show (length entries) ++ " emojis from " ++ T.unpack host'
+                lockHPutStrLn stderr' $ "Fetched " ++ show (length entries) ++ " emojis from " ++ T.unpack host'
+                modifyMVar_ emap $ pure . (<> entriesToMap entries)
+                pure True
+fetchWorker FetchMastodonAPI pw stderr' FederationInstance{fedHost = host'} manager emap =
+    pwWait pw (lockHPutStrLn stderr') "dns"
+        >> retryM
+            3
+            ( MASE.viewAllCustomEmoji
+                manager
+                (MAS.unauthenticated $ "https://" <> URLFrag host' <> "/")
+            )
+        >>= \case
+            Left err -> lockHPutStrLn stderr' ("Error fetching emojis from " ++ T.unpack host' ++ ": " ++ MAS.describeMastoError err) $> False
+            Right resp -> do
+                let entries =
+                        map
+                            ( \e ->
+                                EmojiMapEntry
+                                    (MASE.getCustomEmojisShortcode e)
+                                    [ def
+                                        { emojiName = MASE.getCustomEmojisShortcode e
+                                        , emojiUrl = MASE.getCustomEmojisUrl e
+                                        , emojiCategory = MASE.getCustomEmojisCategory e
+                                        , emojiIsSensitive = Just False
+                                        , emojiLocalOnly = Just False
+                                        }
+                                    ]
+                            )
+                            resp
+                lockHPutStrLn stderr' $ "Fetched " ++ show (length entries) ++ " emojis from " ++ T.unpack host'
                 modifyMVar_ emap $ pure . (<> entriesToMap entries)
                 pure True
 
@@ -300,7 +360,10 @@ downloadFile manager url sizeLimit = do
         Left e -> pure $ Left e
         Right res' -> do
             let bs = responseBody res'
-            let ct = fromJust $ lookup "Content-Type" $ responseHeaders res'
+            let ct =
+                    fromMaybe "application/octet-stream" $
+                        lookup "Content-Type" $
+                            responseHeaders res'
             pure . Right $
                 ( (,) ct <$> (BSL.toStrict <$> bslForceLength sizeLimit bs)
                 )
@@ -569,6 +632,13 @@ doMetaMerge out inFiles =
             )
             . joinEither
 
+confirmIO :: String -> IO Bool
+confirmIO msg = do
+    putStr $ msg ++ " [y/N]: "
+    getLine <&> \case
+        "y" -> True
+        _ -> False
+
 {-# ANN module ("HLint: ignore Redundant <&>" :: String) #-} -- hurts readability
 main :: IO ()
 main =
@@ -639,25 +709,52 @@ main =
                                 )
                                 instances
                                 & maybe id take headCount
-                    hPutStrLn stderr $ "Fetched " ++ show (length instances) ++ " instances, " ++ show (length misskeyInstances) ++ " are Misskey instances"
+                    let mastodonInstances =
+                            filter
+                                ( maybe
+                                    False
+                                    ( \name' ->
+                                        any
+                                            (`T.isInfixOf` name')
+                                            MAS.mastodonVariants
+                                    )
+                                    . fedSoftwareName
+                                )
+                                instances
+                                & maybe id take headCount
+                    hPutStrLn stderr $
+                        "Fetched "
+                            ++ show (length instances)
+                            ++ " instances, "
+                            ++ show (length misskeyInstances)
+                            ++ " are Misskey instances, "
+                            ++ show (length mastodonInstances)
+                            ++ " are Mastodon instances."
                     hPutStrLn stderr "Fetching remote emojis..."
                     pb <-
                         newProgressBar
                             defStyle{stylePrefix = labelAbsProgress}
                             5
-                            (Progress 0 (length misskeyInstances) 0)
+                            (Progress 0 (length misskeyInstances + length mastodonInstances) 0)
                     let incError = updateProgress pb (\p -> p{progressCustom = progressCustom p + 1})
                     emap <- newMVar mempty
-                    forConcurrently_ misskeyInstances $ \inst ->
-                        catch @IOException
-                            ( fetchWorker inst manager emap >>= \case
-                                True -> pure ()
-                                False -> incError
+                    stdErrLock <- newMVar =<< (if ver then pure stderr else openFile "/dev/null" WriteMode)
+                    dnsWaiter <- newMVar $ PoliteWaiter 0.1 HM.empty
+                    let chunks = chunksOf 128 (zip (repeat FetchMisskeyAPI) misskeyInstances ++ zip (repeat FetchMastodonAPI) mastodonInstances)
+                    forConcurrently_ chunks $
+                        mapM_
+                            ( \(ty, inst) ->
+                                catch @IOException
+                                    ( fetchWorker ty dnsWaiter stdErrLock inst manager emap >>= \case
+                                        True -> pure ()
+                                        False -> incError
+                                    )
+                                    ( \e ->
+                                        incError >> hPutStrLn stderr ("Fatal Error on instance " ++ T.unpack (fedHost inst) ++ ": " ++ show e ++ ", skipping...")
+                                    )
+                                    >> incProgress pb 1
                             )
-                            ( \e ->
-                                incError >> hPutStrLn stderr ("Fatal Error on instance " ++ T.unpack (fedHost inst) ++ ": " ++ show e ++ ", skipping...")
-                            )
-                            >> incProgress pb 1
+
                     entries <-
                         mapToEntries
                             <$> readMVar emap
@@ -701,51 +798,51 @@ main =
                         let chunkDir = outputDir </> "chunk-" ++ show i
                          in createDirectoryIfMissing True chunkDir
 
-                    emojiMetas <- forM (zip [0 :: Int ..] bigChunks) $ \(chunkIdx, chunk) -> forConcurrently (chunksOf 128 chunk) $ mapM $ \entry -> do
-                        remoteManager <-
-                            newManager
-                                tlsManagerSettings
-                                    { managerResponseTimeout = responseTimeoutMicro $ timeoutVal * 1000000
-                                    , managerConnCount = 5 -- be more polite?
-                                    , managerModifyRequest = myModifyRequest (lockHPutStrLn stderrLock)
-                                    }
-                        catch @IOException
-                            ( packWorker
-                                pw
-                                (stdoutLock, stderrLock)
-                                remoteManager
-                                limitMb
-                                (outputDir </> "chunk-" ++ show chunkIdx)
-                                entry
-                                >>= \case
-                                    Nothing -> incError $> Nothing
-                                    r -> pure r
-                            )
-                            ( \e ->
-                                incError
-                                    >> hPutStrLn
-                                        stderr
-                                        ("Fatal Error on emoji " ++ T.unpack (emojiMName entry) ++ ": " ++ show e ++ ", skipping...")
-                                        $> Nothing
-                            )
-                            <* incProgress pb 1
-
-                    forM_ (zip [0 :: Int ..] emojiMetas) $ \(chunkIdx, chunkMetas) ->
-                        ( MetaEmojiPack
-                            2
-                            "yume-emoji-tool"
-                            <$> getCurrentTime
-                            <*> pure
-                                ( map
-                                    ( \(f, e) ->
-                                        MetaEmojiEntry
-                                            True
-                                            (T.pack f)
-                                            e
-                                    )
-                                    (catMaybes . concat $ chunkMetas)
+                    forM_ (zip [0 :: Int ..] bigChunks) $ \(chunkIdx, chunk) -> do
+                        chunkMetas <- forConcurrently (chunksOf 128 chunk) $ mapM $ \entry -> do
+                            remoteManager <-
+                                newManager
+                                    tlsManagerSettings
+                                        { managerResponseTimeout = responseTimeoutMicro $ timeoutVal * 1000000
+                                        , managerConnCount = 5 -- be more polite?
+                                        , managerModifyRequest = myModifyRequest (lockHPutStrLn stderrLock)
+                                        }
+                            catch @IOException
+                                ( packWorker
+                                    pw
+                                    (stdoutLock, stderrLock)
+                                    remoteManager
+                                    limitMb
+                                    (outputDir </> "chunk-" ++ show chunkIdx)
+                                    entry
+                                    >>= \case
+                                        Nothing -> incError $> Nothing
+                                        r -> pure r
                                 )
-                        )
+                                ( \e ->
+                                    incError
+                                        >> hPutStrLn
+                                            stderr
+                                            ("Fatal Error on emoji " ++ T.unpack (emojiMName entry) ++ ": " ++ show e ++ ", skipping...")
+                                            $> Nothing
+                                )
+                                <* incProgress pb 1
+
+                        ( MetaEmojiPack
+                                2
+                                "yume-emoji-tool"
+                                <$> getCurrentTime
+                                <*> pure
+                                    ( map
+                                        ( \(f, e) ->
+                                            MetaEmojiEntry
+                                                True
+                                                (T.pack f)
+                                                e
+                                        )
+                                        (catMaybes . concat $ chunkMetas)
+                                    )
+                            )
                             >>= encodeFile (outputDir </> "chunk-" ++ show chunkIdx </> "meta.json")
                 ClearLocalOnlyEmojis ->
                     let go (prevIds, untilId) =
@@ -766,8 +863,7 @@ main =
                                                          in
                                                             (emojiIds ++ prevIds, Just nextToken)
                                                                 <$ hPutStrLn stderr ("Located " ++ show (length emojiIds) ++ " local-only emojis")
-                     in ( when (null token) $ throwIO $ userError "MISSKEY_TOKEN is not set"
-                        )
+                     in when (null token) (throwIO $ userError "MISSKEY_TOKEN is not set")
                             >> untilM (isNothing . snd) go ([], Nothing)
                             >>= (mapM (admBulkDeleteEmojis manager conf) . filter (not . null))
                                 . nub
@@ -780,3 +876,21 @@ main =
                                     Right _ -> pure ()
                                 )
                                 . sequence
+                DeleteFolder folder recursive -> do
+                    when recursive $
+                        void $
+                            untilM
+                                (== False)
+                                ( \_ -> do
+                                    files <- driveListFiles manager conf def{driveListFilesFolderId = Just (T.pack folder), driveListFilesLimit = Just limitVal}
+                                    case files of
+                                        Left err -> error $ describeRequestError err
+                                        Right [] -> pure False
+                                        Right resp -> do
+                                            let fs = map driveCreateResponseId resp
+                                            forConcurrently_ fs $ driveDeleteFile manager conf
+                                            pure True
+                                )
+                                True
+
+                    driveDeleteFolder manager conf (T.pack folder) >> hPutStrLn stderr "Folder deleted"

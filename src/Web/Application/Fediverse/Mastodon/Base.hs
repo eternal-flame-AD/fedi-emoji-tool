@@ -16,8 +16,8 @@ unTagSnakeCaseOptions prefix = defaultOptions{fieldLabelModifier = toSnakeCase .
   toSnakeCase input = dropWhile (== '_') $ toSnakeCase' input
   toSnakeCase' :: String -> String
   toSnakeCase' [] = []
-  toSnakeCase' (x : xs) | isAsciiUpper x = '_' : toLower x : toSnakeCase xs
-  toSnakeCase' (x : xs) = x : toSnakeCase xs
+  toSnakeCase' (x : xs) | isAsciiUpper x = '_' : toLower x : toSnakeCase' xs
+  toSnakeCase' (x : xs) = x : toSnakeCase' xs
 
 mastodonVariants :: [Text]
 mastodonVariants = ["mastodon", "tootdon", "tootcat", "tootdog", "tootfox"]
@@ -27,6 +27,11 @@ data MastoError
   | MastoAPIError MastoApiError
   | MastoBadBodyError String
   deriving (Show)
+
+describeMastoError :: MastoError -> String
+describeMastoError (MastoHTTPError e) = "HTTP error: " ++ show e
+describeMastoError (MastoAPIError e) = "API error: " ++ show e
+describeMastoError (MastoBadBodyError b) = "Bad body: " ++ b
 
 data MastoApiError = MastoApiError
   { mastoApiError :: Text
@@ -41,3 +46,6 @@ newtype MastoServerConf = MastoServerConf
   { mastoBaseURL :: URLFrag
   }
   deriving (Show)
+
+unauthenticated :: URLFrag -> MastoServerConf
+unauthenticated = MastoServerConf
