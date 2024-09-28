@@ -89,7 +89,53 @@ Available commands:
   pack-remote-emojis       Pack the collected remote emojis into a directory
                            that can be ZIPped and imported into Misskey-like
                            instances
-  clear-local-only-emojis  Clear local-only emojis, a mistake fixer
+  clear-local-only-emojis  [Auth required] Clear local-only emojis, a mistake
+                           fixer
 
 Author: Yume <@yume@mi.yumechi.jp>
+```
+
+```bash
+Usage: fedi-emoji-tool fetch-remote-emojis (-o|--output OUTPUT)
+
+  Fetch remote non-licensed emojis into a JSON file describing unique emojis and
+  instances with them
+
+Available options:
+  -o,--output OUTPUT       Output file to save remote emojis
+
+Global options:
+  -h,--home URL            Home URL of the Misskey instance, will read
+                           MISSKEY_HOME environment variable if not provided
+  -l,--pagination INT      Pagination limit
+  -t,--timeout INT         HTTP timeout
+  --head INT               Only process the first N entries as a test run
+  -v,--verbose             Verbose output
+```
+
+```bash
+Usage: fedi-emoji-tool pack-remote-emojis 
+         (-i|--input INPUT) (-o|--output-dir DIR) [-d|--delay DELAY] 
+         [-m|--min-count MIN_COUNT] [-s|--size-limit SIZE_LIMIT]
+
+  Pack the collected remote emojis into a directory that can be ZIPped and
+  imported into Misskey-like instances
+
+Available options:
+  -i,--input INPUT         Input file to upload remote emojis
+  -o,--output-dir DIR      Working directory for the emojis
+  -d,--delay DELAY         Delay between requests to the same host in seconds,
+                           default 0.66
+  -m,--min-count MIN_COUNT Minimum count of instances to use an emoji for it to
+                           be included, default 5
+  -s,--size-limit SIZE_LIMIT
+                           Size limit for downloaded files in MiB, default 32
+
+Global options:
+  -h,--home URL            Home URL of the Misskey instance, will read
+                           MISSKEY_HOME environment variable if not provided
+  -l,--pagination INT      Pagination limit
+  -t,--timeout INT         HTTP timeout
+  --head INT               Only process the first N entries as a test run
+  -v,--verbose             Verbose output
 ```

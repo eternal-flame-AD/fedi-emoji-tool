@@ -18,6 +18,7 @@ import Data.Function ((&))
 import Data.Functor (($>), (<&>))
 import Data.HashMap.Strict (HashMap, insertWith, toList, unionWith)
 import qualified Data.HashMap.Strict as HM
+import Data.Int (Int64)
 import Data.List
 import Data.Maybe (catMaybes, fromJust, fromMaybe, isJust, isNothing, mapMaybe)
 import Data.String (IsString (fromString))
@@ -73,7 +74,7 @@ data Command
     | FetchRemoteEmojis String
     | MetaIntersect FilePath FilePath Bool FilePath
     | MetaMerge String [FilePath]
-    | PackRemoteEmojis String String Float Int
+    | PackRemoteEmojis String String Float Int Int64
     | ClearLocalOnlyEmojis
 
 opts :: Parser (CommonOpts, Command)
@@ -208,6 +209,14 @@ opts =
                                     <> help "Minimum count of instances to use an emoji for it to be included, default 5"
                                     <> value 5
                                 )
+                            <*> option
+                                auto
+                                ( metavar "SIZE_LIMIT"
+                                    <> short 's'
+                                    <> long "size-limit"
+                                    <> help "Size limit for downloaded files in MiB, default 32"
+                                    <> value 32
+                                )
                         )
                         (progDesc "Pack the collected remote emojis into a directory that can be ZIPped and imported into Misskey-like instances")
                     )
@@ -215,7 +224,7 @@ opts =
                     "clear-local-only-emojis"
                     ( info
                         (pure ClearLocalOnlyEmojis)
-                        (progDesc "Clear local-only emojis, a mistake fixer")
+                        (progDesc "[Auth required] Clear local-only emojis, a mistake fixer")
                     )
             )
 
@@ -282,7 +291,7 @@ fetchWorker FederationInstance{fedHost = host'} manager emap =
                 modifyMVar_ emap $ pure . (<> entriesToMap entries)
                 pure True
 
-downloadFile :: Manager -> Text -> Int -> IO (Either RequestError (Maybe (ByteString, ByteString)))
+downloadFile :: Manager -> Text -> Int64 -> IO (Either RequestError (Maybe (ByteString, ByteString)))
 downloadFile manager url sizeLimit = do
     req0 <- parseRequest $ T.unpack url
     let req = req0{decompress = const True}
@@ -296,8 +305,13 @@ downloadFile manager url sizeLimit = do
                 ( (,) ct <$> (BSL.toStrict <$> bslForceLength sizeLimit bs)
                 )
 
-bslForceLength :: Int -> BSL.ByteString -> Maybe BSL.ByteString
-bslForceLength n bsl = if BSL.length bsl <= fromIntegral n then Just bsl else Nothing
+bslForceLength :: Int64 -> BSL.ByteString -> Maybe BSL.ByteString
+bslForceLength n bsl =
+    let
+        probeLength = n + 1
+        probeList = BSL.take probeLength bsl
+     in
+        if BSL.length probeList <= fromIntegral n then Just probeList else Nothing
 
 headPls :: [a] -> a
 headPls [] = error "Empty list"
@@ -331,6 +345,7 @@ packWorker ::
     MVar PoliteWaiter ->
     (MVar Handle, MVar Handle) ->
     Manager ->
+    Int64 ->
     FilePath ->
     EmojiMapEntry ->
     IO (Maybe (FilePath, EmojiItem))
@@ -338,6 +353,7 @@ packWorker
     polite
     (_, stderr')
     remoteManager
+    limitMb
     outDir
     EmojiMapEntry{emojiMName = name', emojiMSeenAt = seenAt} = do
         urls <- shuffle $ map emojiUrl seenAt -- shuffle the URLs to be polite
@@ -356,7 +372,7 @@ packWorker
                 pwWaitURL polite (lockHPutStrLn stderr') url
                 res <-
                     timeIO (lockHPutStrLn stderr') ("download_file " ++ T.unpack (domainOf url)) $
-                        downloadFile remoteManager url (1 `shiftL` 20)
+                        downloadFile remoteManager url (limitMb `shiftL` 20)
                 case res of
                     Left err ->
                         Nothing
@@ -647,8 +663,7 @@ main =
                             <$> readMVar emap
                     hPutStrLn stderr $ "Fetched " ++ show (length entries) ++ " unique emojis from " ++ show (length misskeyInstances) ++ " instances."
                     encodeFile outFilename entries
-                PackRemoteEmojis inFilename outputDir hostDelay minThres -> do
-                    when (null token) $ throwIO $ userError "MISSKEY_TOKEN is not set"
+                PackRemoteEmojis inFilename outputDir hostDelay minThres limitMb -> do
                     createDirectoryIfMissing True outputDir
                     hPutStrLn stderr "Fetching own emojis..."
                     myEmojis <- listEmojis manager conf >>= either (error . describeRequestError) pure
@@ -699,6 +714,7 @@ main =
                                 pw
                                 (stdoutLock, stderrLock)
                                 remoteManager
+                                limitMb
                                 (outputDir </> "chunk-" ++ show chunkIdx)
                                 entry
                                 >>= \case
@@ -750,7 +766,9 @@ main =
                                                          in
                                                             (emojiIds ++ prevIds, Just nextToken)
                                                                 <$ hPutStrLn stderr ("Located " ++ show (length emojiIds) ++ " local-only emojis")
-                     in untilM (isNothing . snd) go ([], Nothing)
+                     in ( when (null token) $ throwIO $ userError "MISSKEY_TOKEN is not set"
+                        )
+                            >> untilM (isNothing . snd) go ([], Nothing)
                             >>= (mapM (admBulkDeleteEmojis manager conf) . filter (not . null))
                                 . nub
                                 . map fst
