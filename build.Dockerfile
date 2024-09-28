@@ -37,7 +37,8 @@ WORKDIR /src
 RUN bash -c ". $HOME/.ghcup/env && cabal build"
 
 RUN outfile=$(find dist-newstyle -name "fedi-emoji-tool" -type f -executable) && \
-    cp $outfile /target/fedi-emoji-tool
+    cp $outfile /target/fedi-emoji-tool && \
+    strip /target/fedi-emoji-tool
 
 FROM debian:bookworm-slim
 
