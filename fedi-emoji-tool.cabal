@@ -22,6 +22,7 @@ common base-reqs
                               LambdaCase,
                               ScopedTypeVariables,
                               TypeApplications
+    other-extensions:         DeriveGeneric
     build-depends:
         base >=4.12 && <5,
         data-default-class ^>=0.1,

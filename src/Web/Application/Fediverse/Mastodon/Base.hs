@@ -34,7 +34,7 @@ describeMastoError (MastoAPIError e) = "API error: " ++ show e
 describeMastoError (MastoBadBodyError b) = "Bad body: " ++ b
 
 data MastoApiError = MastoApiError
-  { mastoApiError :: Text
+  { mastoApiErrorError :: Text
   , mastoApiErrorDescription :: Text
   }
   deriving (Show, Generic)
