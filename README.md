@@ -16,6 +16,17 @@ On [my instance](https://mi.yumechi.jp) with 6.6k federations, the tool selected
 
 My memory optimization goal is <8GB usage for a full pack of 47k emojis.
 
+This is optimized for somewhat well-established self-owned instances, large instances may need to tune the code a bit to avoid memory exhaustion or excessive disk usage, at the very least adjust the threshold. 
+
+If you are a large instance admin, PRs or issues are welcome! 
+Please consider adding the following to your PR/issue (`federation/instance` can be a burden and is never requested on non-home instances) provide additional rate limit info if you like:
+
+```
+I authorize the use of my instance for development and optimization purposes using the following APIs:
+  - `federation/instances​`
+  - `emojis`.
+```
+
 ## Usage 
 
 ### Quick Start
