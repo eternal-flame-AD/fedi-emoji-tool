@@ -22,8 +22,8 @@ My memory optimization goal is <8GB usage for a full pack of 47k emojis.
 
 #### Preconditions
 
-- An Misskey-like instance that you either own or have permission to upload custom emojis.
-- An instance that has a good amount of federations with other instances, technically do not have to be the same instance as the above. ~1000 is a good number to start with. I intentionally do not support recursive fetching to avoid spamming the instances and fetching into unwanted territories.
+- Nothing on the regular workflow need authentication, but to actually import the packed ZIP file, an Misskey-like instance that you have permission to upload custom emojis.
+- An instance that has a good amount of federations with other instances as the "home server", technically do not have to be the same instance as the above. ~1000 is a good number to start with. I intentionally do not support recursive fetching to avoid spamming the instances and fetching into unwanted territories. Banned instances are implicitly excluded.
 - There is a pre-built docker container (`docker.io/l1drm/fedi-emoji-tool`), or you need to build the tool from source, [`ghcup`](https://www.haskell.org/ghcup/#) is recommended for setting up Haskell development environment, a `cabal build` should be enough to build the tool.
 
 #### Steps
