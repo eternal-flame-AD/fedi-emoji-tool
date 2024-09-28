@@ -652,33 +652,29 @@ main =
             case cmd of
                 MetaIntersect in1 in2 negateopt out -> doMetaIntersect in1 in2 negateopt out
                 MetaMerge out inFiles -> doMetaMerge out inFiles
-                SelfEmojis -> do
-                    listEmojis manager conf >>= print
-                SelfInstances -> do
-                    let pagination = paginationOptStream def{limit = limitVal}
-                    instances <-
-                        concat
-                            <$> whileForM
-                                pagination
-                                ( listFederationInstances manager conf def
-                                    >=> ( \case
-                                            Left err ->
-                                                hPutStrLn
-                                                    stderr
-                                                    ("Error fetching instances: " ++ describeRequestError err)
-                                                    $> Nothing
-                                            Right [] -> pure Nothing
-                                            Right insts ->
-                                                Just insts
-                                                    <$ forM_
-                                                        insts
-                                                        ( \inst ->
-                                                            putStrLn $ "Instance: " ++ T.unpack (instanceDescribe inst)
-                                                        )
-                                        )
-                                )
-
-                    print ("# of instances: " ++ show (length instances))
+                SelfEmojis -> listEmojis manager conf >>= print
+                SelfInstances ->
+                    concat
+                        <$> whileForM
+                            (paginationOptStream def{limit = limitVal})
+                            ( listFederationInstances manager conf def
+                                >=> ( \case
+                                        Left err ->
+                                            hPutStrLn
+                                                stderr
+                                                ("Error fetching instances: " ++ describeRequestError err)
+                                                $> Nothing
+                                        Right [] -> pure Nothing
+                                        Right insts ->
+                                            Just insts
+                                                <$ forM_
+                                                    insts
+                                                    ( \inst ->
+                                                        putStrLn $ "Instance: " ++ T.unpack (instanceDescribe inst)
+                                                    )
+                                    )
+                            )
+                        >>= \instances -> print ("# of instances: " ++ show (length instances))
                 FetchRemoteEmojis outFilename -> do
                     hPutStrLn stderr "Fetching own emojis..."
                     myEmojis <- listEmojis manager conf >>= either (error . describeRequestError) pure
