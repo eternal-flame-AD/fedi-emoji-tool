@@ -269,15 +269,18 @@ retryM n act =
         Right a -> pure $ Right a
 
 fetchWorker :: FederationInstance -> Manager -> MVar EmojiMap -> IO Bool
-fetchWorker FederationInstance{fedHost = host'} manager emap = do
-    emojis <- retryM 3 $ listEmojis manager (unauthenticated $ "https://" <> URLFrag host' <> "/")
-    case emojis of
-        Left err -> hPutStrLn stderr ("Error fetching emojis from " ++ T.unpack host' ++ ": " ++ describeRequestError err) $> False
-        Right emojis' -> do
-            let entries = map newEmojiEntry emojis'
-            putStrLn $ "Fetched " ++ show (length entries) ++ " emojis from " ++ T.unpack host'
-            modifyMVar_ emap $ pure . (<> entriesToMap entries)
-            pure True
+fetchWorker FederationInstance{fedHost = host'} manager emap =
+    retryM
+        3
+        ( listEmojis manager (unauthenticated $ "https://" <> URLFrag host' <> "/")
+        )
+        >>= \case
+            Left err -> hPutStrLn stderr ("Error fetching emojis from " ++ T.unpack host' ++ ": " ++ describeRequestError err) $> False
+            Right emojis' -> do
+                let entries = map newEmojiEntry emojis'
+                putStrLn $ "Fetched " ++ show (length entries) ++ " emojis from " ++ T.unpack host'
+                modifyMVar_ emap $ pure . (<> entriesToMap entries)
+                pure True
 
 downloadFile :: Manager -> Text -> Int -> IO (Either RequestError (Maybe (ByteString, ByteString)))
 downloadFile manager url sizeLimit = do
@@ -522,13 +525,13 @@ doMetaIntersect in1 in2 negateopt out = do
                     let diff' = map (\(_, e) -> MetaEmojiEntry True (sanitizeNonAlNum '_' $ emojiName e) e) $ HM.toList intersect'
                     encodeFile out $ MetaEmojiPack 2 h1 et1 diff'
                 else do
-                    let common = HM.intersectionWith (\a b -> (a, b)) e1Map e2Map
+                    let common = HM.intersectionWith (,) e1Map e2Map
                     let common' =
                             map
                                 ( \(a, _) ->
                                     MetaEmojiEntry
                                         True
-                                        (sanitizeNonAlNum '_' $ "merged_" <> (T.pack in1) <> "_" <> (T.pack in2) <> "_" <> emojiName a)
+                                        (sanitizeNonAlNum '_' $ "merged_" <> T.pack in1 <> "_" <> T.pack in2 <> "_" <> emojiName a)
                                         a
                                 )
                                 (HM.elems common)
@@ -536,15 +539,19 @@ doMetaIntersect in1 in2 negateopt out = do
         _ -> error "unreachable"
 
 doMetaMerge :: FilePath -> [FilePath] -> IO ()
-doMetaMerge out inFiles = do
-    e <- joinEither <$> mapM eitherDecodeFileStrict inFiles
-    case e of
-        Left err -> error err
-        Right [] -> error "No input files"
-        Right (p : ps) -> do
-            let host' = metaEmojiHost p
-            let emojis = concatMap metaEmojiEmojis (p : ps)
-            encodeFile out $ MetaEmojiPack 2 host' (metaEmojiExportedAt p) emojis
+doMetaMerge out inFiles =
+    mapM eitherDecodeFileStrict inFiles
+        >>= ( \case
+                Left err -> error err
+                Right [] -> error "No input files"
+                Right (p : ps) ->
+                    do
+                        let host' = metaEmojiHost p
+                        let emojis = concatMap metaEmojiEmojis (p : ps)
+                        encodeFile out $
+                            MetaEmojiPack 2 host' (metaEmojiExportedAt p) emojis
+            )
+            . joinEither
 
 {-# ANN module ("HLint: ignore Redundant <&>" :: String) #-} -- hurts readability
 main :: IO ()
@@ -567,14 +574,22 @@ main =
                         concat
                             <$> whileForM
                                 pagination
-                                ( \pag -> do
-                                    res <- listFederationInstances manager conf def pag
-                                    case res of
-                                        Left err -> hPutStrLn stderr ("Error fetching instances: " ++ describeRequestError err) $> Nothing
-                                        Right [] -> pure Nothing
-                                        Right insts ->
-                                            Just insts
-                                                <$ forM_ insts (\inst -> putStrLn $ "Instance: " ++ T.unpack (instanceDescribe inst))
+                                ( listFederationInstances manager conf def
+                                    >=> ( \case
+                                            Left err ->
+                                                hPutStrLn
+                                                    stderr
+                                                    ("Error fetching instances: " ++ describeRequestError err)
+                                                    $> Nothing
+                                            Right [] -> pure Nothing
+                                            Right insts ->
+                                                Just insts
+                                                    <$ forM_
+                                                        insts
+                                                        ( \inst ->
+                                                            putStrLn $ "Instance: " ++ T.unpack (instanceDescribe inst)
+                                                        )
+                                        )
                                 )
 
                     print ("# of instances: " ++ show (length instances))
@@ -699,25 +714,23 @@ main =
                             )
                             <* incProgress pb 1
 
-                    forM_ (zip [0 :: Int ..] emojiMetas) $ \(chunkIdx, chunkMetas) -> do
-                        let metas = concat chunkMetas
-                        meta <-
-                            MetaEmojiPack
-                                2
-                                "yume-emoji-tool"
-                                <$> getCurrentTime
-                                <*> pure
-                                    ( map
-                                        ( \(f, e) ->
-                                            MetaEmojiEntry
-                                                True
-                                                (T.pack f)
-                                                e
-                                        )
-                                        (catMaybes metas)
+                    forM_ (zip [0 :: Int ..] emojiMetas) $ \(chunkIdx, chunkMetas) ->
+                        ( MetaEmojiPack
+                            2
+                            "yume-emoji-tool"
+                            <$> getCurrentTime
+                            <*> pure
+                                ( map
+                                    ( \(f, e) ->
+                                        MetaEmojiEntry
+                                            True
+                                            (T.pack f)
+                                            e
                                     )
-
-                        encodeFile (outputDir </> "chunk-" ++ show chunkIdx </> "meta.json") meta
+                                    (catMaybes . concat $ chunkMetas)
+                                )
+                        )
+                            >>= encodeFile (outputDir </> "chunk-" ++ show chunkIdx </> "meta.json")
                 ClearLocalOnlyEmojis ->
                     let go (prevIds, untilId) =
                             let leopts = def{listEmojisUntilId = untilId, listEmojisLimit = Just limitVal}
@@ -737,11 +750,10 @@ main =
                                                          in
                                                             (emojiIds ++ prevIds, Just nextToken)
                                                                 <$ hPutStrLn stderr ("Located " ++ show (length emojiIds) ++ " local-only emojis")
-                     in ( ( untilM (isNothing . snd) go ([], Nothing)
-                                >>= (mapM (admBulkDeleteEmojis manager conf) . filter (not . null))
-                                    . nub
-                                    . map fst
-                          )
+                     in untilM (isNothing . snd) go ([], Nothing)
+                            >>= (mapM (admBulkDeleteEmojis manager conf) . filter (not . null))
+                                . nub
+                                . map fst
                             >>= ( \case
                                     Left err ->
                                         throwIO $
@@ -750,4 +762,3 @@ main =
                                     Right _ -> pure ()
                                 )
                                 . sequence
-                        )
